@@ -148,14 +148,14 @@ interface NotionContextType {
   state: NotionState;
   dispatch: React.Dispatch<NotionAction>;
   currentPage: Page | null;
-  addPage: (title: string) => string;
-  updatePage: (id: string, updates: Partial<Page>) => void;
-  deletePage: (id: string) => void;
-  setCurrentPage: (id: string) => void;
-  addBlock: (pageId: string, type: Block['type'], index?: number) => string;
-  updateBlock: (pageId: string, blockId: string, updates: Partial<Block>) => void;
-  deleteBlock: (pageId: string, blockId: string) => void;
-  reorderBlocks: (pageId: string, fromIndex: number, toIndex: number) => void;
+  addPage: (title: string) => Promise<string>;
+  updatePage: (id: string, updates: Partial<Page>) => Promise<void>;
+  deletePage: (id: string) => Promise<void>;
+  setCurrentPage: (id: string) => Promise<void>;
+  addBlock: (pageId: string, type: Block['type'], index?: number) => Promise<string>;
+  updateBlock: (pageId: string, blockId: string, updates: Partial<Block>) => Promise<void>;
+  deleteBlock: (pageId: string, blockId: string) => Promise<void>;
+  reorderBlocks: (pageId: string, fromIndex: number, toIndex: number) => Promise<void>;
 }
 
 const NotionContext = createContext<NotionContextType | undefined>(undefined);

@@ -10,9 +10,11 @@ interface BlockEditorProps {
   index: number;
   isSelected: boolean;
   onSelect: () => void;
+  focusedBlockId: string | null;
+  setFocusedBlockId: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
-export function BlockEditor({ block, pageId, index, isSelected, onSelect }: BlockEditorProps) {
+export function BlockEditor({ block, pageId, index, isSelected, onSelect, focusedBlockId, setFocusedBlockId }: BlockEditorProps) {
   const { updateBlock, deleteBlock, addBlock, currentPage, reorderBlocks } = useNotion();
   const [content, setContent] = useState(block.content);
   const [showTypeSelector, setShowTypeSelector] = useState(false);
@@ -32,6 +34,24 @@ export function BlockEditor({ block, pageId, index, isSelected, onSelect }: Bloc
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [content]);
+
+  useEffect(() => {
+    if (focusedBlockId === block.id) {
+      let tries = 0;
+      function tryFocus() {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const len = textareaRef.current.value.length;
+          textareaRef.current.setSelectionRange(len, len);
+          setFocusedBlockId(null);
+        } else if (tries < 5) {
+          tries++;
+          requestAnimationFrame(tryFocus);
+        }
+      }
+      tryFocus();
+    }
+  }, [focusedBlockId, block.id, setFocusedBlockId]);
 
   const handleContentChange = (newContent: string) => {
     setContent(newContent);
@@ -53,25 +73,37 @@ export function BlockEditor({ block, pageId, index, isSelected, onSelect }: Bloc
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      const newBlockId = addBlock(pageId, 'paragraph', index + 1);
-      // Focus the new block after a short delay
-      setTimeout(() => {
-        const newBlockElement = document.querySelector(`[data-block-id="${newBlockId}"] textarea`);
-        if (newBlockElement) {
-          (newBlockElement as HTMLTextAreaElement).focus();
-        }
-      }, 50);
+      addBlock(pageId, 'paragraph', index + 1).then(newBlockId => setFocusedBlockId(newBlockId));
     } else if (e.key === 'Backspace' && content === '' && currentPage && currentPage.blocks.length > 1) {
       e.preventDefault();
       deleteBlock(pageId, block.id);
       // Focus the previous block
       const prevIndex = Math.max(0, index - 1);
-      setTimeout(() => {
-        const blocks = document.querySelectorAll('[data-block-id] textarea');
-        if (blocks[prevIndex]) {
-          (blocks[prevIndex] as HTMLTextAreaElement).focus();
+      if (currentPage.blocks[prevIndex]) {
+        setFocusedBlockId(currentPage.blocks[prevIndex].id);
+      }
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const textarea = textareaRef.current;
+      if (textarea && currentPage) {
+        const { selectionStart, value } = textarea;
+        const lines = value.split('\n');
+        const beforeCursor = value.substr(0, selectionStart);
+        const currentLine = beforeCursor.split('\n').length - 1;
+        if (
+          (e.key === 'ArrowUp' && currentLine === 0) ||
+          (e.key === 'ArrowDown' && currentLine === lines.length - 1)
+        ) {
+          // 只有在首行/末行时才切换 block
+          e.preventDefault();
+          // 这里只做选中，不自动聚焦
+          if (e.key === 'ArrowUp' && index > 0 && currentPage.blocks[index - 1]) {
+            setFocusedBlockId(currentPage.blocks[index - 1].id);
+          } else if (e.key === 'ArrowDown' && index < currentPage.blocks.length - 1 && currentPage.blocks[index + 1]) {
+            setFocusedBlockId(currentPage.blocks[index + 1].id);
+          }
         }
-      }, 50);
+        // 否则让 textarea 正常处理上下键
+      }
     }
   };
 
@@ -232,13 +264,7 @@ export function BlockEditor({ block, pageId, index, isSelected, onSelect }: Bloc
           <button
             onClick={(e) => {
               e.stopPropagation();
-              const newBlockId = addBlock(pageId, 'paragraph', index + 1);
-              setTimeout(() => {
-                const newBlockElement = document.querySelector(`[data-block-id="${newBlockId}"] textarea`);
-                if (newBlockElement) {
-                  (newBlockElement as HTMLTextAreaElement).focus();
-                }
-              }, 50);
+              addBlock(pageId, 'paragraph', index + 1).then(newBlockId => setFocusedBlockId(newBlockId));
             }}
             className="p-1 hover:bg-gray-200 rounded"
           >
