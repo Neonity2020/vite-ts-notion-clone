@@ -1,5 +1,6 @@
 import React, { createContext, useReducer, useEffect, useRef } from 'react';
 import { Block, Page, NotionState } from '../types';
+import { initDatabase, pageService, blockService } from '../services/database';
 
 type NotionAction =
   | { type: 'INITIALIZE_STATE'; payload: { pages: Page[]; currentPageId: string | null } }
@@ -165,84 +166,75 @@ export function NotionProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(notionReducer, initialState);
   const isInitialized = useRef(false);
 
-  // Load data from localStorage on mount
+  // 初始化数据库并加载数据
   useEffect(() => {
     if (isInitialized.current) return;
     
-    const savedData = localStorage.getItem('notion-clone-data');
-    
-    if (savedData) {
+    const loadData = async () => {
       try {
-        const parsedData = JSON.parse(savedData);
+        // 初始化数据库
+        initDatabase();
         
-        const pages = parsedData.pages.map((page: { id: string; title: string; blocks: Array<{ id: string; type: string; content: string; createdAt: string; updatedAt: string }>; createdAt: string; updatedAt: string }) => ({
-          ...page,
-          createdAt: new Date(page.createdAt),
-          updatedAt: new Date(page.updatedAt),
-          blocks: page.blocks.map((block: { id: string; type: string; content: string; createdAt: string; updatedAt: string }) => ({
-            ...block,
-            createdAt: new Date(block.createdAt),
-            updatedAt: new Date(block.updatedAt),
-          })),
-        }));
+        // 从数据库加载所有页面
+        const pages = await pageService.getAllPages();
         
-        // 批量更新，避免中间状态被保存
-        const currentPageId = parsedData.currentPageId && pages.some((p: Page) => p.id === parsedData.currentPageId) 
-          ? parsedData.currentPageId 
-          : (pages.length > 0 ? pages[0].id : null);
+        if (pages.length > 0) {
+          // 加载第一个页面的完整数据（包括块）
+          const firstPage = await pageService.getPageWithBlocks(pages[0].id);
+          if (firstPage) {
+            const pagesWithBlocks = pages.map(page => 
+              page.id === firstPage.id ? firstPage : page
+            );
+            
+            dispatch({ type: 'INITIALIZE_STATE', payload: { pages: pagesWithBlocks, currentPageId: firstPage.id } });
+          }
+        } else {
+          // 创建默认页面
+          const defaultPage: Page = {
+            id: 'default-page',
+            title: 'Welcome to Notion Clone',
+            blocks: [
+              {
+                id: 'welcome-block',
+                type: 'heading1',
+                content: 'Welcome to your Notion Clone',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+              {
+                id: 'intro-block',
+                type: 'paragraph',
+                content: 'Start typing to create your first block. Use "/" to see all available block types.',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          
+          // 保存到数据库
+          await pageService.createPage(defaultPage);
+          for (let i = 0; i < defaultPage.blocks.length; i++) {
+            await blockService.createBlock(defaultPage.blocks[i], defaultPage.id, i);
+          }
+          
+          dispatch({ type: 'INITIALIZE_STATE', payload: { pages: [defaultPage], currentPageId: defaultPage.id } });
+        }
         
-        // 一次性设置所有状态
-        dispatch({ type: 'INITIALIZE_STATE', payload: { pages, currentPageId } });
         isInitialized.current = true;
       } catch (error) {
-        console.error('Error loading saved data:', error);
+        console.error('Error initializing database:', error);
         isInitialized.current = true;
       }
-    } else {
-      // Create default page if no data exists
-      const defaultPage: Page = {
-        id: 'default-page',
-        title: 'Welcome to Notion Clone',
-        blocks: [
-          {
-            id: 'welcome-block',
-            type: 'heading1',
-            content: 'Welcome to your Notion Clone',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-          {
-            id: 'intro-block',
-            type: 'paragraph',
-            content: 'Start typing to create your first block. Use "/" to see all available block types.',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        ],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      dispatch({ type: 'ADD_PAGE', payload: defaultPage });
-      dispatch({ type: 'SET_CURRENT_PAGE', payload: defaultPage.id });
-      isInitialized.current = true;
-    }
+    };
+    
+    loadData();
   }, []);
-
-  // Save data to localStorage whenever state changes
-  useEffect(() => {
-    if (!isInitialized.current) return;
-    
-    console.log('State changed - pages count:', state.pages.length, 'currentPageId:', state.currentPageId);
-    
-    localStorage.setItem('notion-clone-data', JSON.stringify({
-      pages: state.pages,
-      currentPageId: state.currentPageId,
-    }));
-  }, [state.pages, state.currentPageId]);
 
   const currentPage = state.pages.find(page => page.id === state.currentPageId) || null;
 
-  const addPage = (title: string): string => {
+  const addPage = async (title: string): Promise<string> => {
     const newPage: Page = {
       id: `page-${Date.now()}`,
       title,
@@ -250,23 +242,42 @@ export function NotionProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+    
+    // 保存到数据库
+    await pageService.createPage(newPage);
+    
     dispatch({ type: 'ADD_PAGE', payload: newPage });
     return newPage.id;
   };
 
-  const updatePage = (id: string, updates: Partial<Page>) => {
+  const updatePage = async (id: string, updates: Partial<Page>) => {
+    // 更新数据库
+    await pageService.updatePage(id, updates);
+    
     dispatch({ type: 'UPDATE_PAGE', payload: { id, updates } });
   };
 
-  const deletePage = (id: string) => {
+  const deletePage = async (id: string) => {
+    // 从数据库删除
+    await pageService.deletePage(id);
+    
     dispatch({ type: 'DELETE_PAGE', payload: id });
   };
 
-  const setCurrentPage = (id: string) => {
+  const setCurrentPage = async (id: string) => {
+    // 如果页面还没有加载块，则从数据库加载
+    const page = state.pages.find(p => p.id === id);
+    if (page && page.blocks.length === 0) {
+      const pageWithBlocks = await pageService.getPageWithBlocks(id);
+      if (pageWithBlocks) {
+        dispatch({ type: 'UPDATE_PAGE', payload: { id, updates: { blocks: pageWithBlocks.blocks } } });
+      }
+    }
+    
     dispatch({ type: 'SET_CURRENT_PAGE', payload: id });
   };
 
-  const addBlock = (pageId: string, type: Block['type'], index?: number): string => {
+  const addBlock = async (pageId: string, type: Block['type'], index?: number): Promise<string> => {
     const newBlock: Block = {
       id: `block-${Date.now()}`,
       type,
@@ -274,19 +285,34 @@ export function NotionProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+    
+    const actualIndex = index ?? state.pages.find(p => p.id === pageId)?.blocks.length ?? 0;
+    
+    // 保存到数据库
+    await blockService.insertBlockAtPosition(newBlock, pageId, actualIndex);
+    
     dispatch({ type: 'ADD_BLOCK', payload: { pageId, block: newBlock, index } });
     return newBlock.id;
   };
 
-  const updateBlock = (pageId: string, blockId: string, updates: Partial<Block>) => {
+  const updateBlock = async (pageId: string, blockId: string, updates: Partial<Block>) => {
+    // 更新数据库
+    await blockService.updateBlock(blockId, updates);
+    
     dispatch({ type: 'UPDATE_BLOCK', payload: { pageId, blockId, updates } });
   };
 
-  const deleteBlock = (pageId: string, blockId: string) => {
+  const deleteBlock = async (pageId: string, blockId: string) => {
+    // 从数据库删除
+    await blockService.deleteBlock(blockId);
+    
     dispatch({ type: 'DELETE_BLOCK', payload: { pageId, blockId } });
   };
 
-  const reorderBlocks = (pageId: string, fromIndex: number, toIndex: number) => {
+  const reorderBlocks = async (pageId: string, fromIndex: number, toIndex: number) => {
+    // 更新数据库
+    await blockService.reorderBlocks(pageId, fromIndex, toIndex);
+    
     dispatch({ type: 'REORDER_BLOCKS', payload: { pageId, fromIndex, toIndex } });
   };
 
